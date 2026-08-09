@@ -19,12 +19,27 @@ Web app that reads a Zerodha **holdings.csv** export and builds a portfolio anal
 | `Index.html` | Dashboard shell |
 | `Stylesheet.html` | Styles (Apps Script partial) |
 | `ClientJS.html` | CSV parse, analytics, charts, insights |
-| `appsscript.json` | Manifest (web app, V8, IST) |
+| `appsscript.json` | Optional manifest (for clasp / advanced); editor deploy can skip it |
 | `sample/holdings.csv` | Example Zerodha export |
+| `docs/` | GitHub Pages site (short URL) |
 | `demo/standalone.html` | Local preview without Apps Script |
 | `.clasp.json.example` | Optional [clasp](https://github.com/google/clasp) config |
 
+## Short URL (recommended)
+
+Apps Script cannot customize `/macros/s/…/exec` URLs. Use **GitHub Pages** for a short link that serves the same dashboard:
+
+1. On GitHub: **Settings → Pages**
+2. **Source**: Deploy from a branch
+3. Branch: `main` (or this PR branch after merge) → folder **`/docs`** → Save
+4. Open: **https://prat0487.github.io/Share-market-analytics/**
+
+Optional: `https://prat0487.github.io/Share-market-analytics/gas.html` redirects to your Apps Script deployment.
+
+Other options: a free shortener (bit.ly / t.co), or a custom domain CNAME pointed at GitHub Pages.
+
 ## Deploy with the Apps Script editor
+
 
 1. Open [script.google.com](https://script.google.com) → **New project**
 2. Rename the project (e.g. `Holdings Pulse`)
