@@ -28,13 +28,27 @@ Web app that reads a Zerodha **holdings.csv** export and builds a portfolio anal
 
 1. Open [script.google.com](https://script.google.com) → **New project**
 2. Rename the project (e.g. `Holdings Pulse`)
-3. Replace `Code.gs` contents with this repo’s `Code.gs`
-4. Create HTML files named exactly: `Index`, `Stylesheet`, `ClientJS` and paste the matching repo files
-5. Project Settings → check **Show "appsscript.json" manifest** → paste `appsscript.json`
-6. **Deploy → New deployment → Web app**
+3. Replace the default `Code.gs` with this repo’s `Code.gs`
+4. Click **+** next to Files → **HTML**, and create three files named exactly:
+   - `Index` ← paste `Index.html`
+   - `Stylesheet` ← paste `Stylesheet.html`
+   - `ClientJS` ← paste `ClientJS.html`  
+   (Apps Script drops the `.html` suffix in the file name.)
+5. **Optional — timezone only (Project Settings is key/value, not JSON):**
+   - Open the gear **Project Settings**
+   - Set **Time zone** to `Asia/Kolkata` (or your zone)
+   - Do **not** paste `appsscript.json` into Project Settings
+6. **Optional — edit the manifest file (not Project Settings):**
+   - In **Project Settings**, check **Show "appsscript.json" manifest file in editor**
+   - Go back to the **Editor**; `appsscript.json` now appears in the **left file list**
+   - Open that file and replace its contents with this repo’s `appsscript.json`
+7. **Deploy → New deployment → Select type → Web app**
    - Execute as: **Me**
-   - Who has access: **Anyone** (or your account only)
-7. Open the web app URL → upload `holdings.csv` (or use **Load sample data**)
+   - Who has access: **Anyone** (or **Only myself**)
+   - Click **Deploy**, authorize if prompted, copy the **Web app URL**
+8. Open the URL → upload `holdings.csv` (or **Load sample data**)
+
+The web app access settings are chosen in the Deploy dialog. You do not need `appsscript.json` for a working dashboard if you set timezone + deploy options in the UI.
 
 ## Deploy with clasp (optional)
 
