@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Holdings Pulse — Zerodha Analytics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <?!= include('Stylesheet'); ?>
+  </head>
+  <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+    <div class="bg-glow" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <p class="brand-name">Holdings Pulse</p>
+          <p class="brand-sub">Zerodha portfolio analytics</p>
+        </div>
+      </div>
+      <div class="topbar-actions" id="topbarActions" hidden>
+        <button type="button" class="btn btn-ghost" id="btnReset">New upload</button>
+        <label class="btn btn-secondary file-btn">
+          Replace CSV
+          <input type="file" id="fileReplace" accept=".csv,text/csv" hidden />
+        </label>
+      </div>
+    </header>
+
+    <main>
+      <!-- Upload -->
+      <section class="hero" id="uploadSection">
+        <div class="hero-copy">
+          <h1>Holdings Pulse</h1>
+          <p class="hero-lead">
+            Drop your Zerodha <code>holdings.csv</code> to surface concentration risk,
+            dead-weight positions, tax-loss candidates, and a prioritized action plan.
+          </p>
+          <div class="cta-row">
+            <label class="btn btn-primary file-btn">
+              Upload holdings.csv
+              <input type="file" id="fileInput" accept=".csv,text/csv" hidden />
+            </label>
+            <button type="button" class="btn btn-ghost" id="btnSample">Load sample data</button>
+          </div>
+          <p class="hero-note">
+            Parsed entirely in your browser. Nothing is stored on a server.
+          </p>
+        </div>
+        <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Drop CSV file here">
+          <div class="dropzone-inner">
+            <span class="drop-icon" aria-hidden="true"></span>
+            <p><strong>Drag & drop</strong> holdings.csv here</p>
+            <p class="muted">Export from Zerodha Console → Holdings → Download</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dashboard -->
+      <section class="dashboard" id="dashboard" hidden>
+        <div class="dash-intro">
+          <div>
+            <p class="eyebrow" id="asOfLabel">Portfolio snapshot</p>
+            <h2 id="portfolioTitle">Your holdings</h2>
+          </div>
+          <div class="health" id="healthBadge" title="Composite portfolio health (0–100)">
+            <span class="health-score" id="healthScore">—</span>
+            <span class="health-label">/ 100</span>
+          </div>
+        </div>
+
+        <div class="kpi-strip" id="kpiStrip"></div>
+
+        <div class="panel actions-panel">
+          <div class="panel-head">
+            <h3>Actionable insights</h3>
+            <p class="muted">Prioritized moves based on this snapshot</p>
+          </div>
+          <ol class="insight-list" id="insightList"></ol>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>P&amp;L distribution</h3>
+              <p class="muted">Winners vs losers by current value</p>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="chartPnL"></canvas>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Allocation by size</h3>
+              <p class="muted">Top holdings share of portfolio</p>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="chartAlloc"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Biggest drags</h3>
+              <p class="muted">Largest absolute unrealized losses</p>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table" id="tableDrags">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th class="num">Invested</th>
+                    <th class="num">P&amp;L</th>
+                    <th class="num">Net %</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Top contributors</h3>
+              <p class="muted">Largest absolute unrealized gains</p>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table" id="tableGains">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th class="num">Invested</th>
+                    <th class="num">P&amp;L</th>
+                    <th class="num">Net %</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Day movers</h3>
+              <p class="muted">Today’s % change leaders</p>
+            </div>
+            <div class="chart-wrap chart-sm">
+              <canvas id="chartDay"></canvas>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Position size buckets</h3>
+              <p class="muted">How capital is spread across names</p>
+            </div>
+            <div class="chart-wrap chart-sm">
+              <canvas id="chartBuckets"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head row-between">
+            <div>
+              <h3>All holdings</h3>
+              <p class="muted">Sort and filter the full book</p>
+            </div>
+            <div class="filters">
+              <input type="search" id="searchBox" placeholder="Search symbol…" autocomplete="off" />
+              <select id="filterPnL">
+                <option value="all">All</option>
+                <option value="winners">Winners</option>
+                <option value="losers">Losers</option>
+                <option value="deep">Deep losers (&lt;−20%)</option>
+                <option value="small">Small (&lt;₹15k)</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-scroll tall">
+            <table class="data-table sortable" id="tableAll">
+              <thead>
+                <tr>
+                  <th data-sort="symbol">Symbol</th>
+                  <th class="num" data-sort="qty">Qty</th>
+                  <th class="num" data-sort="avg">Avg</th>
+                  <th class="num" data-sort="ltp">LTP</th>
+                  <th class="num" data-sort="invested">Invested</th>
+                  <th class="num" data-sort="cur">Cur. val</th>
+                  <th class="num" data-sort="pnl">P&amp;L</th>
+                  <th class="num" data-sort="net">Net %</th>
+                  <th class="num" data-sort="day">Day %</th>
+                  <th class="num" data-sort="weight">Weight %</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>Holdings Pulse · Google Apps Script web app · Not investment advice</p>
+    </footer>
+
+    <div class="toast" id="toast" hidden role="status"></div>
+
+    <?!= include('ClientJS'); ?>
+  </body>
+</html>
