@@ -1,0 +1,965 @@
+<script>
+(function () {
+  'use strict';
+
+  var INR = new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0
+  });
+  var INR2 = new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 2
+  });
+  var PCT = new Intl.NumberFormat('en-IN', {
+    maximumFractionDigits: 2,
+    signDisplay: 'exceptZero'
+  });
+  var NUM = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
+
+  var state = {
+    holdings: [],
+    analytics: null,
+    sortKey: 'pnl',
+    sortDir: 'asc',
+    charts: {}
+  };
+
+  var SAMPLE_CSV =
+    '"Instrument","Qty.","Avg. cost","LTP","Invested","Cur. val","P&L","Net chg.","Day chg.",""\n' +
+    '"IRFC",375,130.69,88.75,49008.4,33281.25,-15727.15,-32.09,-0.6,""\n' +
+    '"INOXWIND",420,114.41,78,48051.4,32760,-15291.4,-31.82,-0.26,""\n' +
+    '"PGHH",4,11906.07,8497,47624.28,33988,-13636.28,-28.63,0.15,""\n' +
+    '"NETWORK18",1200,40.85,29.56,49018.5,35472,-13546.5,-27.64,-1.17,""\n' +
+    '"ROUTE",62,720.02,528.3,44641.4,32754.6,-11886.8,-26.63,-0.97,""\n' +
+    '"NEWGEN",95,672.38,551,63875.65,52345,-11530.65,-18.05,1.59,""\n' +
+    '"MHRIL",123,322.82,229.66,39706.57,28248.18,-11458.39,-28.86,-0.57,""\n' +
+    '"EIHOTEL",142,381.92,306.55,54232.48,43530.1,-10702.38,-19.73,-5.87,""\n' +
+    '"TCS",27,2644.65,2452.7,71405.63,66222.9,-5182.73,-7.26,3.36,""\n' +
+    '"INFY",35,1317.52,1175.1,46113.3,41128.5,-4984.8,-10.81,0.87,""\n' +
+    '"HDFCBANK",40,852.46,731,34098.2,29240,-4858.2,-14.25,-0.45,""\n' +
+    '"BEL",200,180.5,210.2,36100,42040,5940,16.45,1.2,""\n' +
+    '"RELIANCE",25,2800,2950,70000,73750,3750,5.36,0.8,""\n' +
+    '"HAL",12,4200,4800,50400,57600,7200,14.29,2.1,""\n' +
+    '"SWIGGY",80,420,380,33600,30400,-3200,-9.52,-2.74,""\n' +
+    '"NAVINFLUOR",8,3800,3500,30400,28000,-2400,-7.89,-4.38,""\n' +
+    '"TRENT",17,3527.09,2997,59960.51,50949,-9011.51,-15.03,-3.54,""\n' +
+    '"BEML",14,2273.57,1787.8,31830,25029.2,-6800.8,-21.37,3.63,""\n' +
+    '"PATELENG",900,33.8,28.59,30420,25731,-4689,-15.41,-0.69,""\n' +
+    '"ITC",65,385.02,286.1,25026,18596.5,-6429.5,-25.69,0.07,""\n' +
+    '"TINY1",10,500,480,5000,4800,-200,-4,0.1,""\n' +
+    '"TINY2",20,400,390,8000,7800,-200,-2.5,-0.2,""\n' +
+    '"TINY3",15,600,610,9000,9150,150,1.67,0.5,""';
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function showToast(msg) {
+    var el = $('toast');
+    el.textContent = msg;
+    el.hidden = false;
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function () {
+      el.hidden = true;
+    }, 2800);
+  }
+
+  function parseNumber(v) {
+    if (v == null) return 0;
+    var s = String(v).replace(/[",\s₹]/g, '').trim();
+    if (!s || s === '-') return 0;
+    var n = Number(s);
+    return isFinite(n) ? n : 0;
+  }
+
+  function parseCSV(text) {
+    var lines = text.replace(/^\uFEFF/, '').trim().split(/\r?\n/);
+    if (lines.length < 2) throw new Error('CSV appears empty.');
+
+    var header = splitCsvLine(lines[0]).map(function (h) {
+      return h.replace(/^"|"$/g, '').trim().toLowerCase();
+    });
+
+    var map = {
+      instrument: findCol(header, ['instrument', 'symbol', 'tradingsymbol', 'ticker']),
+      qty: findCol(header, ['qty.', 'qty', 'quantity', 'qty']),
+      avg: findCol(header, ['avg. cost', 'avg cost', 'average cost', 'avg price', 'average price']),
+      ltp: findCol(header, ['ltp', 'last traded price', 'close', 'price']),
+      invested: findCol(header, ['invested', 'investment', 'invested value']),
+      cur: findCol(header, ['cur. val', 'cur val', 'current value', 'market value', 'value']),
+      pnl: findCol(header, ['p&l', 'pnl', 'profit', 'unrealized p&l']),
+      net: findCol(header, ['net chg.', 'net chg', 'net change', 'net %', 'overall %']),
+      day: findCol(header, ['day chg.', 'day chg', 'day change', 'day %', "today's change"])
+    };
+
+    if (map.instrument < 0) {
+      throw new Error('Could not find Instrument/Symbol column. Use Zerodha holdings.csv.');
+    }
+
+    var rows = [];
+    for (var i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      var cols = splitCsvLine(lines[i]);
+      var symbol = cleanCell(cols[map.instrument]);
+      if (!symbol) continue;
+
+      var qty = map.qty >= 0 ? parseNumber(cols[map.qty]) : 0;
+      var avg = map.avg >= 0 ? parseNumber(cols[map.avg]) : 0;
+      var ltp = map.ltp >= 0 ? parseNumber(cols[map.ltp]) : 0;
+      var invested = map.invested >= 0 ? parseNumber(cols[map.invested]) : qty * avg;
+      var cur = map.cur >= 0 ? parseNumber(cols[map.cur]) : qty * ltp;
+      var pnl = map.pnl >= 0 ? parseNumber(cols[map.pnl]) : cur - invested;
+      var net = map.net >= 0 ? parseNumber(cols[map.net]) : invested ? (pnl / invested) * 100 : 0;
+      var day = map.day >= 0 ? parseNumber(cols[map.day]) : 0;
+
+      rows.push({
+        symbol: symbol,
+        qty: qty,
+        avg: avg,
+        ltp: ltp,
+        invested: invested,
+        cur: cur,
+        pnl: pnl,
+        net: net,
+        day: day
+      });
+    }
+
+    if (!rows.length) throw new Error('No holdings found in the file.');
+    return rows;
+  }
+
+  function findCol(header, aliases) {
+    for (var i = 0; i < aliases.length; i++) {
+      var idx = header.indexOf(aliases[i]);
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  }
+
+  function cleanCell(v) {
+    return String(v == null ? '' : v).replace(/^"|"$/g, '').trim();
+  }
+
+  function splitCsvLine(line) {
+    var out = [];
+    var cur = '';
+    var inQ = false;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQ = !inQ;
+        }
+      } else if (ch === ',' && !inQ) {
+        out.push(cur);
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function analyze(holdings) {
+    var totalInv = 0;
+    var totalCur = 0;
+    var totalPnl = 0;
+    var dayPnl = 0;
+    var winners = [];
+    var losers = [];
+
+    holdings.forEach(function (h) {
+      totalInv += h.invested;
+      totalCur += h.cur;
+      totalPnl += h.pnl;
+      dayPnl += h.cur * (h.day / 100) / (1 + h.day / 100 || 1);
+      if (h.pnl > 0) winners.push(h);
+      else if (h.pnl < 0) losers.push(h);
+    });
+
+    // Approximate day P&L from day % and current value: day% is on LTP, so
+    // day move ≈ cur * day / (100 + day) when day is % change from prev close.
+    dayPnl = holdings.reduce(function (sum, h) {
+      if (!isFinite(h.day) || h.day === -100) return sum;
+      return sum + h.cur * (h.day / (100 + h.day));
+    }, 0);
+
+    var withWeight = holdings.map(function (h) {
+      return Object.assign({}, h, {
+        weight: totalCur ? (h.cur / totalCur) * 100 : 0
+      });
+    });
+
+    var byCur = withWeight.slice().sort(function (a, b) { return b.cur - a.cur; });
+    var byPnlAsc = withWeight.slice().sort(function (a, b) { return a.pnl - b.pnl; });
+    var byPnlDesc = withWeight.slice().sort(function (a, b) { return b.pnl - a.pnl; });
+    var byNetAsc = withWeight.slice().sort(function (a, b) { return a.net - b.net; });
+    var byDayDesc = withWeight.slice().sort(function (a, b) { return b.day - a.day; });
+    var byDayAsc = withWeight.slice().sort(function (a, b) { return a.day - b.day; });
+
+    var top5 = byCur.slice(0, 5).reduce(function (s, h) { return s + h.cur; }, 0);
+    var top10 = byCur.slice(0, 10).reduce(function (s, h) { return s + h.cur; }, 0);
+    var small = withWeight.filter(function (h) { return h.invested > 0 && h.invested < 15000; });
+    var deep = withWeight.filter(function (h) { return h.net <= -20; });
+    var micro = withWeight.filter(function (h) { return h.weight < 0.5 && h.invested < 20000; });
+
+    var avgPosition = holdings.length ? totalInv / holdings.length : 0;
+    var medianInv = median(holdings.map(function (h) { return h.invested; }));
+    var winRate = holdings.length ? (winners.length / holdings.length) * 100 : 0;
+    var netPct = totalInv ? (totalPnl / totalInv) * 100 : 0;
+
+    var buckets = [
+      { label: '< ₹10k', min: 0, max: 10000 },
+      { label: '₹10–25k', min: 10000, max: 25000 },
+      { label: '₹25–50k', min: 25000, max: 50000 },
+      { label: '₹50k+', min: 50000, max: Infinity }
+    ].map(function (b) {
+      var items = withWeight.filter(function (h) {
+        return h.invested >= b.min && h.invested < b.max;
+      });
+      return {
+        label: b.label,
+        count: items.length,
+        invested: items.reduce(function (s, h) { return s + h.invested; }, 0)
+      };
+    });
+
+    var health = scoreHealth({
+      count: holdings.length,
+      netPct: netPct,
+      winRate: winRate,
+      top10Pct: totalCur ? (top10 / totalCur) * 100 : 0,
+      smallCount: small.length,
+      deepCount: deep.length
+    });
+
+    var insights = buildInsights({
+      holdings: withWeight,
+      count: holdings.length,
+      totalInv: totalInv,
+      totalCur: totalCur,
+      totalPnl: totalPnl,
+      netPct: netPct,
+      winRate: winRate,
+      winners: winners,
+      losers: losers,
+      top5Pct: totalCur ? (top5 / totalCur) * 100 : 0,
+      top10Pct: totalCur ? (top10 / totalCur) * 100 : 0,
+      small: small,
+      deep: deep,
+      micro: micro,
+      byPnlAsc: byPnlAsc,
+      byPnlDesc: byPnlDesc,
+      byNetAsc: byNetAsc,
+      avgPosition: avgPosition,
+      dayPnl: dayPnl,
+      health: health
+    });
+
+    return {
+      holdings: withWeight,
+      totalInv: totalInv,
+      totalCur: totalCur,
+      totalPnl: totalPnl,
+      netPct: netPct,
+      dayPnl: dayPnl,
+      winRate: winRate,
+      winners: winners.length,
+      losers: losers.length,
+      count: holdings.length,
+      top5Pct: totalCur ? (top5 / totalCur) * 100 : 0,
+      top10Pct: totalCur ? (top10 / totalCur) * 100 : 0,
+      avgPosition: avgPosition,
+      medianInv: medianInv,
+      small: small,
+      deep: deep,
+      buckets: buckets,
+      byCur: byCur,
+      byPnlAsc: byPnlAsc,
+      byPnlDesc: byPnlDesc,
+      byDayDesc: byDayDesc,
+      byDayAsc: byDayAsc,
+      health: health,
+      insights: insights
+    };
+  }
+
+  function median(arr) {
+    if (!arr.length) return 0;
+    var a = arr.slice().sort(function (x, y) { return x - y; });
+    var mid = Math.floor(a.length / 2);
+    return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+  }
+
+  function scoreHealth(x) {
+    var score = 70;
+
+    // Diversification sweet spot ~15–40 names
+    if (x.count > 80) score -= 18;
+    else if (x.count > 50) score -= 10;
+    else if (x.count > 40) score -= 4;
+    else if (x.count < 8) score -= 8;
+    else score += 4;
+
+    if (x.netPct <= -20) score -= 20;
+    else if (x.netPct <= -10) score -= 12;
+    else if (x.netPct < 0) score -= 6;
+    else if (x.netPct >= 15) score += 10;
+    else if (x.netPct >= 5) score += 6;
+
+    if (x.winRate < 25) score -= 10;
+    else if (x.winRate < 40) score -= 5;
+    else if (x.winRate >= 60) score += 6;
+
+    if (x.top10Pct > 70) score -= 8;
+    else if (x.top10Pct < 25 && x.count > 40) score -= 4;
+
+    if (x.smallCount > 30) score -= 10;
+    else if (x.smallCount > 15) score -= 5;
+
+    if (x.deepCount > 15) score -= 10;
+    else if (x.deepCount > 8) score -= 5;
+
+    return Math.max(5, Math.min(98, Math.round(score)));
+  }
+
+  function buildInsights(a) {
+    var list = [];
+
+    if (a.count > 50) {
+      list.push({
+        priority: 'high',
+        title: 'Book is over-diversified',
+        body:
+          a.count +
+          ' positions dilute attention and add noise. High-conviction portfolios often run 15–35 names. Consolidate micro holdings into core themes.',
+        symbols: a.micro.slice(0, 8).map(function (h) { return h.symbol; }).join(', ')
+      });
+    } else if (a.count > 40) {
+      list.push({
+        priority: 'med',
+        title: 'Consider pruning weak positions',
+        body:
+          a.count +
+          ' holdings is on the high side. Exit names without a thesis to free capital for winners.',
+        symbols: a.byPnlAsc.slice(0, 5).map(function (h) { return h.symbol; }).join(', ')
+      });
+    }
+
+    if (a.deep.length >= 5) {
+      var deepLoss = a.deep.reduce(function (s, h) { return s + h.pnl; }, 0);
+      list.push({
+        priority: 'high',
+        title: 'Tax-loss harvest candidates',
+        body:
+          a.deep.length +
+          ' names are down ≥20% (≈ ' +
+          INR.format(deepLoss) +
+          '). Review for exit / switch into similar exposure to realize losses where useful.',
+        symbols: a.deep
+          .slice()
+          .sort(function (x, y) { return x.net - y.net; })
+          .slice(0, 8)
+          .map(function (h) { return h.symbol + ' (' + PCT.format(h.net) + '%)'; })
+          .join(', ')
+      });
+    }
+
+    if (a.small.length >= 10) {
+      var smallCap = a.small.reduce(function (s, h) { return s + h.invested; }, 0);
+      list.push({
+        priority: 'med',
+        title: 'Dead-weight small positions',
+        body:
+          a.small.length +
+          ' holdings under ₹15k invested (≈ ' +
+          INR.format(smallCap) +
+          '). Merge or exit — transaction costs and tracking effort outweigh edge.',
+        symbols: a.small
+          .slice()
+          .sort(function (x, y) { return x.invested - y.invested; })
+          .slice(0, 10)
+          .map(function (h) { return h.symbol; })
+          .join(', ')
+      });
+    }
+
+    var topDrag = a.byPnlAsc.slice(0, 5);
+    var dragSum = topDrag.reduce(function (s, h) { return s + h.pnl; }, 0);
+    if (dragSum < 0) {
+      list.push({
+        priority: a.netPct < -10 ? 'high' : 'med',
+        title: 'Top 5 drags dominate losses',
+        body:
+          'These five names account for ' +
+          INR.format(dragSum) +
+          ' of unrealized P&L. Revisit thesis, stop-loss, or average-down rules stock by stock.',
+        symbols: topDrag
+          .map(function (h) { return h.symbol + ' (' + INR.format(h.pnl) + ')'; })
+          .join(', ')
+      });
+    }
+
+    if (a.top10Pct < 30 && a.count > 30) {
+      list.push({
+        priority: 'med',
+        title: 'Capital is thinly spread',
+        body:
+          'Top 10 names are only ' +
+          NUM.format(a.top10Pct) +
+          '% of current value. Size up highest-conviction ideas; cut the long tail.',
+        symbols: a.holdings
+          .slice()
+          .sort(function (x, y) { return bWeight(y) - bWeight(x); })
+          .slice(0, 5)
+          .map(function (h) { return h.symbol; })
+          .join(', ')
+      });
+    } else if (a.top10Pct > 65) {
+      list.push({
+        priority: 'med',
+        title: 'Concentration risk in top names',
+        body:
+          'Top 10 holdings are ' +
+          NUM.format(a.top10Pct) +
+          '% of the book. Ensure position sizes match risk tolerance.',
+        symbols: a.holdings
+          .slice()
+          .sort(function (x, y) { return y.weight - x.weight; })
+          .slice(0, 5)
+          .map(function (h) { return h.symbol + ' ' + NUM.format(h.weight) + '%'; })
+          .join(', ')
+      });
+    }
+
+    if (a.winRate < 30 && a.count >= 10) {
+      list.push({
+        priority: 'high',
+        title: 'Low hit rate — process check',
+        body:
+          'Only ' +
+          NUM.format(a.winRate) +
+          '% of positions are in profit (' +
+          a.winners.length +
+          '/' +
+          a.count +
+          '). Audit entry timing, sector bias, and whether averaging losers is working.',
+        symbols: ''
+      });
+    }
+
+    if (a.netPct < -8) {
+      list.push({
+        priority: 'med',
+        title: 'Drawdown recovery plan',
+        body:
+          'Portfolio is ' +
+          PCT.format(a.netPct) +
+          '% vs cost. Prefer capital recycling into stronger relative performers over blanket averaging across all losers.',
+        symbols: a.byPnlDesc
+          .filter(function (h) { return h.pnl > 0; })
+          .slice(0, 5)
+          .map(function (h) { return h.symbol; })
+          .join(', ')
+      });
+    }
+
+    var dayAbs = Math.abs(a.dayPnl);
+    if (dayAbs > 5000) {
+      list.push({
+        priority: 'low',
+        title: a.dayPnl >= 0 ? 'Positive day impulse' : 'Risk-off day — watch stop levels',
+        body:
+          'Estimated day P&L ≈ ' +
+          INR.format(a.dayPnl) +
+          '. Use day movers to confirm whether weakness is stock-specific or book-wide.',
+        symbols: ''
+      });
+    }
+
+    if (!list.length) {
+      list.push({
+        priority: 'low',
+        title: 'Portfolio looks balanced on this snapshot',
+        body: 'No major structural red flags. Keep reviewing conviction and rebalance on a schedule.',
+        symbols: ''
+      });
+    }
+
+    var order = { high: 0, med: 1, low: 2 };
+    return list.sort(function (x, y) {
+      return order[x.priority] - order[y.priority];
+    }).slice(0, 7);
+
+    function bWeight(h) {
+      return h.weight || 0;
+    }
+  }
+
+  function destroyCharts() {
+    Object.keys(state.charts).forEach(function (k) {
+      if (state.charts[k]) state.charts[k].destroy();
+    });
+    state.charts = {};
+  }
+
+  function render(analytics) {
+    state.analytics = analytics;
+    $('uploadSection').hidden = true;
+    $('dashboard').hidden = false;
+    $('topbarActions').hidden = false;
+
+    var healthColor =
+      analytics.health >= 70 ? 'var(--gain)' :
+      analytics.health >= 45 ? 'var(--warn)' : 'var(--loss)';
+    $('healthScore').textContent = String(analytics.health);
+    $('healthScore').style.color = healthColor;
+    $('portfolioTitle').textContent =
+      analytics.count + ' holdings · ' + INR.format(analytics.totalCur);
+    $('asOfLabel').textContent =
+      'Snapshot · invested ' + INR.format(analytics.totalInv);
+
+    renderKpis(analytics);
+    renderInsights(analytics.insights);
+    renderTables(analytics);
+    renderCharts(analytics);
+    renderAllTable();
+  }
+
+  function renderKpis(a) {
+    var items = [
+      { label: 'Invested', value: INR.format(a.totalInv) },
+      {
+        label: 'Current value',
+        value: INR.format(a.totalCur)
+      },
+      {
+        label: 'Unrealized P&L',
+        value: INR.format(a.totalPnl) + ' (' + PCT.format(a.netPct) + '%)',
+        cls: a.totalPnl >= 0 ? 'gain' : 'loss'
+      },
+      {
+        label: 'Est. day P&L',
+        value: INR.format(a.dayPnl),
+        cls: a.dayPnl >= 0 ? 'gain' : 'loss'
+      },
+      {
+        label: 'Win rate',
+        value: NUM.format(a.winRate) + '% (' + a.winners + '/' + a.count + ')',
+        cls: a.winRate >= 50 ? 'gain' : a.winRate < 30 ? 'loss' : 'warn'
+      }
+    ];
+
+    $('kpiStrip').innerHTML = items
+      .map(function (k) {
+        return (
+          '<article class="kpi"><p class="kpi-label">' +
+          escapeHtml(k.label) +
+          '</p><p class="kpi-value ' +
+          (k.cls || '') +
+          '">' +
+          escapeHtml(k.value) +
+          '</p></article>'
+        );
+      })
+      .join('');
+  }
+
+  function renderInsights(insights) {
+    $('insightList').innerHTML = insights
+      .map(function (ins) {
+        return (
+          '<li class="insight">' +
+          '<span class="insight-tag tag-' +
+          ins.priority +
+          '">' +
+          escapeHtml(ins.priority) +
+          '</span>' +
+          '<div><h4>' +
+          escapeHtml(ins.title) +
+          '</h4><p>' +
+          escapeHtml(ins.body) +
+          '</p>' +
+          (ins.symbols
+            ? '<p class="symbols">' + escapeHtml(ins.symbols) + '</p>'
+            : '') +
+          '</div></li>'
+        );
+      })
+      .join('');
+  }
+
+  function renderTables(a) {
+    fillSimpleTable($('tableDrags').querySelector('tbody'), a.byPnlAsc.slice(0, 8));
+    var gains = a.byPnlDesc.filter(function (h) { return h.pnl > 0; }).slice(0, 8);
+    if (!gains.length) {
+      $('tableGains').querySelector('tbody').innerHTML =
+        '<tr><td colspan="4" class="muted">No winning positions in this file.</td></tr>';
+    } else {
+      fillSimpleTable($('tableGains').querySelector('tbody'), gains);
+    }
+  }
+
+  function fillSimpleTable(tbody, rows) {
+    tbody.innerHTML = rows
+      .map(function (h) {
+        return (
+          '<tr><td>' +
+          escapeHtml(h.symbol) +
+          '</td><td class="num">' +
+          escapeHtml(INR.format(h.invested)) +
+          '</td><td class="num ' +
+          (h.pnl >= 0 ? 'pos' : 'neg') +
+          '">' +
+          escapeHtml(INR.format(h.pnl)) +
+          '</td><td class="num ' +
+          (h.net >= 0 ? 'pos' : 'neg') +
+          '">' +
+          escapeHtml(PCT.format(h.net) + '%') +
+          '</td></tr>'
+        );
+      })
+      .join('');
+  }
+
+  function filteredHoldings() {
+    var q = ($('searchBox').value || '').trim().toLowerCase();
+    var f = $('filterPnL').value;
+    return state.analytics.holdings.filter(function (h) {
+      if (q && h.symbol.toLowerCase().indexOf(q) < 0) return false;
+      if (f === 'winners' && h.pnl <= 0) return false;
+      if (f === 'losers' && h.pnl >= 0) return false;
+      if (f === 'deep' && h.net > -20) return false;
+      if (f === 'small' && h.invested >= 15000) return false;
+      return true;
+    });
+  }
+
+  function renderAllTable() {
+    var rows = filteredHoldings().slice().sort(function (a, b) {
+      var ka = a[state.sortKey];
+      var kb = b[state.sortKey];
+      if (typeof ka === 'string') {
+        ka = ka.toLowerCase();
+        kb = String(kb).toLowerCase();
+      }
+      if (ka < kb) return state.sortDir === 'asc' ? -1 : 1;
+      if (ka > kb) return state.sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    $('tableAll').querySelector('tbody').innerHTML = rows
+      .map(function (h) {
+        return (
+          '<tr>' +
+          '<td>' + escapeHtml(h.symbol) + '</td>' +
+          '<td class="num">' + escapeHtml(NUM.format(h.qty)) + '</td>' +
+          '<td class="num">' + escapeHtml(INR2.format(h.avg)) + '</td>' +
+          '<td class="num">' + escapeHtml(INR2.format(h.ltp)) + '</td>' +
+          '<td class="num">' + escapeHtml(INR.format(h.invested)) + '</td>' +
+          '<td class="num">' + escapeHtml(INR.format(h.cur)) + '</td>' +
+          '<td class="num ' + (h.pnl >= 0 ? 'pos' : 'neg') + '">' + escapeHtml(INR.format(h.pnl)) + '</td>' +
+          '<td class="num ' + (h.net >= 0 ? 'pos' : 'neg') + '">' + escapeHtml(PCT.format(h.net) + '%') + '</td>' +
+          '<td class="num ' + (h.day >= 0 ? 'pos' : 'neg') + '">' + escapeHtml(PCT.format(h.day) + '%') + '</td>' +
+          '<td class="num">' + escapeHtml(NUM.format(h.weight)) + '</td>' +
+          '</tr>'
+        );
+      })
+      .join('');
+  }
+
+  function renderCharts(a) {
+    destroyCharts();
+    Chart.defaults.color = '#8aa0b2';
+    Chart.defaults.borderColor = 'rgba(148, 178, 198, 0.18)';
+    Chart.defaults.font.family = "'Outfit', sans-serif";
+
+    var winVal = a.holdings.filter(function (h) { return h.pnl > 0; })
+      .reduce(function (s, h) { return s + h.cur; }, 0);
+    var loseVal = a.holdings.filter(function (h) { return h.pnl <= 0; })
+      .reduce(function (s, h) { return s + h.cur; }, 0);
+
+    state.charts.pnl = new Chart($('chartPnL'), {
+      type: 'doughnut',
+      data: {
+        labels: ['In profit', 'In loss'],
+        datasets: [{
+          data: [winVal, loseVal],
+          backgroundColor: ['#3dd68c', '#ff6b6b'],
+          borderWidth: 0,
+          hoverOffset: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom' },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                var v = ctx.raw || 0;
+                var pct = a.totalCur ? (v / a.totalCur) * 100 : 0;
+                return ' ' + INR.format(v) + ' (' + NUM.format(pct) + '%)';
+              }
+            }
+          }
+        },
+        cutout: '62%'
+      }
+    });
+
+    var top = a.byCur.slice(0, 8);
+    var rest = a.totalCur - top.reduce(function (s, h) { return s + h.cur; }, 0);
+    var allocLabels = top.map(function (h) { return h.symbol; });
+    var allocData = top.map(function (h) { return h.cur; });
+    if (rest > 0) {
+      allocLabels.push('Others');
+      allocData.push(rest);
+    }
+
+    state.charts.alloc = new Chart($('chartAlloc'), {
+      type: 'bar',
+      data: {
+        labels: allocLabels,
+        datasets: [{
+          label: 'Current value',
+          data: allocData,
+          backgroundColor: allocLabels.map(function (_, i) {
+            return i === allocLabels.length - 1 && rest > 0
+              ? 'rgba(94, 200, 255, 0.35)'
+              : 'rgba(45, 212, 168, 0.75)';
+          }),
+          borderRadius: 8,
+          maxBarThickness: 36
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            ticks: {
+              callback: function (v) {
+                return '₹' + Number(v).toLocaleString('en-IN', { notation: 'compact' });
+              }
+            }
+          }
+        }
+      }
+    });
+
+    var dayUp = a.byDayDesc.slice(0, 5);
+    var dayDown = a.byDayAsc.slice(0, 5).reverse();
+    var dayRows = dayDown.concat(dayUp);
+    state.charts.day = new Chart($('chartDay'), {
+      type: 'bar',
+      data: {
+        labels: dayRows.map(function (h) { return h.symbol; }),
+        datasets: [{
+          label: 'Day %',
+          data: dayRows.map(function (h) { return h.day; }),
+          backgroundColor: dayRows.map(function (h) {
+            return h.day >= 0 ? 'rgba(61, 214, 140, 0.8)' : 'rgba(255, 107, 107, 0.8)';
+          }),
+          borderRadius: 6,
+          maxBarThickness: 28
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            ticks: { callback: function (v) { return v + '%'; } }
+          },
+          y: { grid: { display: false } }
+        }
+      }
+    });
+
+    state.charts.buckets = new Chart($('chartBuckets'), {
+      type: 'bar',
+      data: {
+        labels: a.buckets.map(function (b) { return b.label; }),
+        datasets: [{
+          label: 'Positions',
+          data: a.buckets.map(function (b) { return b.count; }),
+          backgroundColor: 'rgba(94, 200, 255, 0.7)',
+          borderRadius: 8,
+          maxBarThickness: 42
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              afterLabel: function (ctx) {
+                var b = a.buckets[ctx.dataIndex];
+                return 'Invested: ' + INR.format(b.invested);
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { stepSize: 1 }, beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function ingestCsv(text, label) {
+    try {
+      var holdings = parseCSV(text);
+      var analytics = analyze(holdings);
+      state.holdings = holdings;
+      render(analytics);
+      showToast('Loaded ' + holdings.length + ' holdings' + (label ? ' · ' + label : ''));
+
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withFailureHandler(function () {})
+          .logUploadSummary(text.slice(0, 200000));
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(err.message || 'Failed to parse CSV');
+    }
+  }
+
+  function readFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      ingestCsv(String(e.target.result || ''), file.name);
+    };
+    reader.onerror = function () {
+      showToast('Could not read file');
+    };
+    reader.readAsText(file);
+  }
+
+  function resetUi() {
+    destroyCharts();
+    state.holdings = [];
+    state.analytics = null;
+    $('dashboard').hidden = true;
+    $('uploadSection').hidden = false;
+    $('topbarActions').hidden = true;
+    $('fileInput').value = '';
+    $('fileReplace').value = '';
+    $('searchBox').value = '';
+    $('filterPnL').value = 'all';
+  }
+
+  function bindDropzone(el, onFile) {
+    ['dragenter', 'dragover'].forEach(function (evt) {
+      el.addEventListener(evt, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.add('dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function (evt) {
+      el.addEventListener(evt, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove('dragover');
+      });
+    });
+    el.addEventListener('drop', function (e) {
+      var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) onFile(file);
+    });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        $('fileInput').click();
+      }
+    });
+  }
+
+  function init() {
+    $('fileInput').addEventListener('change', function (e) {
+      readFile(e.target.files && e.target.files[0]);
+    });
+    $('fileReplace').addEventListener('change', function (e) {
+      readFile(e.target.files && e.target.files[0]);
+    });
+    $('btnSample').addEventListener('click', function () {
+      // Prefer full sample/holdings.csv when served locally; else embedded snippet.
+      fetch('sample/holdings.csv')
+        .then(function (res) {
+          if (!res.ok) throw new Error('no sample file');
+          return res.text();
+        })
+        .then(function (text) {
+          ingestCsv(text, 'sample/holdings.csv');
+        })
+        .catch(function () {
+          fetch('../sample/holdings.csv')
+            .then(function (res) {
+              if (!res.ok) throw new Error('no sample file');
+              return res.text();
+            })
+            .then(function (text) {
+              ingestCsv(text, 'sample/holdings.csv');
+            })
+            .catch(function () {
+              ingestCsv(SAMPLE_CSV, 'sample');
+            });
+        });
+    });
+    $('btnReset').addEventListener('click', resetUi);
+    bindDropzone($('dropzone'), readFile);
+
+    $('searchBox').addEventListener('input', renderAllTable);
+    $('filterPnL').addEventListener('change', renderAllTable);
+
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#tableAll th[data-sort]'),
+      function (th) {
+        th.addEventListener('click', function () {
+          var key = th.getAttribute('data-sort');
+          if (state.sortKey === key) {
+            state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            state.sortKey = key;
+            state.sortDir = key === 'symbol' ? 'asc' : 'desc';
+          }
+          renderAllTable();
+        });
+      }
+    );
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
