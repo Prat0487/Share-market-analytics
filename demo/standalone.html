@@ -680,9 +680,9 @@
             <p class="eyebrow" id="asOfLabel">Portfolio snapshot</p>
             <h2 id="portfolioTitle">Your holdings</h2>
           </div>
-          <div class="health" id="healthBadge" title="Composite portfolio health">
+          <div class="health" id="healthBadge" title="Composite portfolio health (0–100)">
             <span class="health-score" id="healthScore">—</span>
-            <span class="health-label">Health</span>
+            <span class="health-label">/ 100</span>
           </div>
         </div>
 
@@ -1126,35 +1126,46 @@
   }
 
   function scoreHealth(x) {
-    var score = 70;
+    // Soft-penalty model so multiple issues don't collapse to the floor.
+    var score = 78;
+    var penalties = [];
 
-    // Diversification sweet spot ~15–40 names
-    if (x.count > 80) score -= 18;
-    else if (x.count > 50) score -= 10;
-    else if (x.count > 40) score -= 4;
-    else if (x.count < 8) score -= 8;
-    else score += 4;
+    if (x.count > 100) penalties.push(12);
+    else if (x.count > 60) penalties.push(8);
+    else if (x.count > 40) penalties.push(4);
+    else if (x.count < 8) penalties.push(6);
+    else if (x.count >= 15 && x.count <= 35) score += 6;
 
-    if (x.netPct <= -20) score -= 20;
-    else if (x.netPct <= -10) score -= 12;
-    else if (x.netPct < 0) score -= 6;
+    if (x.netPct <= -20) penalties.push(14);
+    else if (x.netPct <= -10) penalties.push(9);
+    else if (x.netPct < 0) penalties.push(4);
     else if (x.netPct >= 15) score += 10;
     else if (x.netPct >= 5) score += 6;
 
-    if (x.winRate < 25) score -= 10;
-    else if (x.winRate < 40) score -= 5;
-    else if (x.winRate >= 60) score += 6;
+    if (x.winRate < 20) penalties.push(10);
+    else if (x.winRate < 35) penalties.push(6);
+    else if (x.winRate < 50) penalties.push(2);
+    else if (x.winRate >= 65) score += 7;
 
-    if (x.top10Pct > 70) score -= 8;
-    else if (x.top10Pct < 25 && x.count > 40) score -= 4;
+    if (x.top10Pct > 75) penalties.push(7);
+    else if (x.top10Pct < 20 && x.count > 40) penalties.push(5);
+    else if (x.top10Pct >= 30 && x.top10Pct <= 55) score += 3;
 
-    if (x.smallCount > 30) score -= 10;
-    else if (x.smallCount > 15) score -= 5;
+    if (x.smallCount > 40) penalties.push(7);
+    else if (x.smallCount > 20) penalties.push(4);
 
-    if (x.deepCount > 15) score -= 10;
-    else if (x.deepCount > 8) score -= 5;
+    if (x.deepCount > 20) penalties.push(7);
+    else if (x.deepCount > 10) penalties.push(4);
 
-    return Math.max(5, Math.min(98, Math.round(score)));
+    // Diminishing stack: full + 70% + 50% of remaining penalties
+    penalties.sort(function (a, b) { return b - a; });
+    var applied = 0;
+    var weights = [1, 0.7, 0.5, 0.4, 0.3, 0.25];
+    for (var i = 0; i < penalties.length; i++) {
+      applied += penalties[i] * (weights[i] != null ? weights[i] : 0.2);
+    }
+    score -= applied;
+    return Math.max(18, Math.min(96, Math.round(score)));
   }
 
   function buildInsights(a) {
